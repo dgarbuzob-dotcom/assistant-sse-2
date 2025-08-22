@@ -6,7 +6,6 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(204).end();
-
   if (req.method !== "POST") return res.status(405).end("Use POST");
 
   // читаем JSON-тело
@@ -42,6 +41,7 @@ export default async function handler(req, res) {
     });
 
     // 3) запускаем run со stream:true
+    console.log("RUN:start", { threadId, assistant: process.env.ASSISTANT_ID });
     const runResp = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs`, {
       method: "POST",
       headers: {
@@ -52,9 +52,11 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({ assistant_id: process.env.ASSISTANT_ID, stream: true })
     });
+    console.log("RUN:resp", runResp.status, runResp.statusText);
 
     if (!runResp.ok || !runResp.body) {
-      const txt = await runResp.text();
+      const txt = await runResp.text().catch(() => "");
+      console.error("RUN:error_body", txt);
       sse({ type: "error", error: `OpenAI ${runResp.status}: ${txt}` });
       return res.end();
     }
@@ -109,6 +111,7 @@ export default async function handler(req, res) {
 
     res.end();
   } catch (e) {
+    console.error("STREAM:error", e);
     sse({ type: "error", error: String(e) });
     res.end();
   }
