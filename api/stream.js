@@ -146,3 +146,15 @@ async function openai(url, init) {
   if (!r.ok) throw new Error(`OpenAI ${r.status}: ${txt}`);
   return txt ? JSON.parse(txt) : {};
 }
+
+async function readJson(req) {
+  try {
+    const chunks = [];
+    for await (const c of req) chunks.push(Buffer.from(c));
+    const raw = Buffer.concat(chunks).toString("utf8");
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error("readJson error", e);
+    return {};
+  }
+}
