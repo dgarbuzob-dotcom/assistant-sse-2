@@ -11,6 +11,7 @@ export default async function handler(req, res) {
 
   // читаем JSON-тело
   const body = await readJson(req);
+  console.log("STREAM body:", typeof body, body);
   const prompt = body?.prompt;
   const incomingThreadId = body?.thread_id || null;
   if (!prompt) return res.status(400).end("Missing 'prompt'");
