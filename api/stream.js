@@ -8,14 +8,14 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "POST") return res.status(405).end("Use POST");
 
-  // читаем JSON-тело
+  // читаем JSON-тело всегда вручную
   const body = await readJson(req);
-  console.log("STREAM body:", typeof body, body);
+  console.log("STREAM body:", body);
   const prompt = body?.prompt;
   const incomingThreadId = body?.thread_id || null;
   if (!prompt) return res.status(400).end("Missing 'prompt'");
 
-  // SSE-заголовки
+  // SSE заголовки
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
@@ -23,7 +23,7 @@ export default async function handler(req, res) {
   const sse = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
   try {
-    // 1) создаём/берём тред
+    // 1) создаём тред если нет
     let threadId = incomingThreadId;
     if (!threadId) {
       const t = await openai("https://api.openai.com/v1/threads", {
@@ -34,7 +34,7 @@ export default async function handler(req, res) {
       sse({ type: "thread.created", thread_id: threadId });
     }
 
-    // 2) добавляем сообщение пользователя
+    // 2) добавляем сообщение
     await openai(`https://api.openai.com/v1/threads/${threadId}/messages`, {
       method: "POST",
       body: JSON.stringify({ role: "user", content: prompt })
@@ -68,30 +68,25 @@ export default async function handler(req, res) {
         if (!line.startsWith("data:")) continue;
         const payload = line.slice(5).trim();
         if (!payload || payload === "[DONE]") continue;
-
         try {
           const evt = JSON.parse(payload);
-
           if (evt.type === "response.output_text.delta") {
             const delta = evt.delta || "";
             full += delta;
             sse({ type: "delta", text: delta });
           }
-
           if (evt.type === "response.completed") {
             sse({ type: "done", thread_id: threadId, text: full });
           }
-
           if (evt.type === "error") {
             sse({ type: "error", error: evt.error?.message || "Unknown error" });
           }
-        } catch (_) { /* пропускаем нечитаемое */ }
+        } catch (_) {}
       }
     };
 
-    // читаем поток (и WebStream, и Node Readable)
+    // читаем поток
     if (typeof runResp.body.getReader === "function") {
-      // Web Streams
       const reader = runResp.body.getReader();
       const decoder = new TextDecoder();
       for (;;) {
@@ -100,7 +95,6 @@ export default async function handler(req, res) {
         handleChunkText(decoder.decode(value, { stream: true }));
       }
     } else {
-      // Node Readable
       runResp.body.setEncoding?.("utf8");
       await new Promise((resolve) => {
         runResp.body.on("data", (chunk) => handleChunkText(String(chunk)));
@@ -119,15 +113,12 @@ export default async function handler(req, res) {
 
 async function readJson(req) {
   try {
-    if (req.body) {
-      if (typeof req.body === "string") return JSON.parse(req.body);
-      return req.body;
-    }
     const chunks = [];
     for await (const c of req) chunks.push(Buffer.from(c));
     const raw = Buffer.concat(chunks).toString("utf8");
     return JSON.parse(raw);
-  } catch {
+  } catch (e) {
+    console.error("readJson error", e);
     return {};
   }
 }
@@ -145,16 +136,4 @@ async function openai(url, init) {
   const txt = await r.text();
   if (!r.ok) throw new Error(`OpenAI ${r.status}: ${txt}`);
   return txt ? JSON.parse(txt) : {};
-}
-
-async function readJson(req) {
-  try {
-    const chunks = [];
-    for await (const c of req) chunks.push(Buffer.from(c));
-    const raw = Buffer.concat(chunks).toString("utf8");
-    return JSON.parse(raw);
-  } catch (e) {
-    console.error("readJson error", e);
-    return {};
-  }
 }
