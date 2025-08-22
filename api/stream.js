@@ -3,16 +3,23 @@ export default async function handler(req, res) {
   const origin = req.headers.origin || "*";
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return res.status(405).end("Use POST");
+  if (req.method !== "POST" && req.method !== "GET") return res.status(405).end("Use POST or GET");
 
-  // читаем JSON-тело всегда вручную
-  const body = await readJson(req);
+  // читаем JSON-тело (если есть) + параллельно разбираем query
+  const body = req.method === "POST" ? await readJson(req) : {};
+  const url = new URL(req.url, `https://${req.headers.host}`);
+  const promptFromQuery = url.searchParams.get("prompt");
+  const threadIdFromQuery = url.searchParams.get("thread_id");
+
   console.log("STREAM body:", body);
-  const prompt = body?.prompt;
-  const incomingThreadId = body?.thread_id || null;
+  console.log("STREAM query:", Object.fromEntries(url.searchParams.entries()));
+
+  const prompt = body?.prompt ?? promptFromQuery ?? null;
+  const incomingThreadId = body?.thread_id ?? threadIdFromQuery ?? null;
+
   if (!prompt) return res.status(400).end("Missing 'prompt'");
 
   // SSE заголовки
@@ -23,7 +30,7 @@ export default async function handler(req, res) {
   const sse = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
   try {
-    // 1) создаём тред если нет
+    // 1) создаём/берём тред
     let threadId = incomingThreadId;
     if (!threadId) {
       const t = await openai("https://api.openai.com/v1/threads", {
@@ -34,7 +41,7 @@ export default async function handler(req, res) {
       sse({ type: "thread.created", thread_id: threadId });
     }
 
-    // 2) добавляем сообщение
+    // 2) добавляем сообщение пользователя
     await openai(`https://api.openai.com/v1/threads/${threadId}/messages`, {
       method: "POST",
       body: JSON.stringify({ role: "user", content: prompt })
@@ -81,11 +88,11 @@ export default async function handler(req, res) {
           if (evt.type === "error") {
             sse({ type: "error", error: evt.error?.message || "Unknown error" });
           }
-        } catch (_) {}
+        } catch {}
       }
     };
 
-    // читаем поток
+    // читаем поток (и WebStream, и Node Readable)
     if (typeof runResp.body.getReader === "function") {
       const reader = runResp.body.getReader();
       const decoder = new TextDecoder();
@@ -116,7 +123,7 @@ async function readJson(req) {
     const chunks = [];
     for await (const c of req) chunks.push(Buffer.from(c));
     const raw = Buffer.concat(chunks).toString("utf8");
-    return JSON.parse(raw);
+    return raw ? JSON.parse(raw) : {};
   } catch (e) {
     console.error("readJson error", e);
     return {};
