@@ -123,7 +123,9 @@ async function readJson(req) {
     for await (const c of req) chunks.push(Buffer.from(c));
     const raw = Buffer.concat(chunks).toString("utf8");
     return JSON.parse(raw);
-  } catch { return {}; }
+  } catch {
+    return {};
+  }
 }
 
 async function openai(url, init) {
